@@ -3,8 +3,153 @@ const navToggle = document.querySelector('.menu-toggle');
 const primaryNav = document.querySelector('.primary-nav');
 const toast = document.querySelector('.toast');
 const cartCount = document.querySelector('.cart-count');
-let orderCount = 0;
+const cartDialog = document.querySelector('#cart-dialog');
+const cartItems = document.querySelector('#cart-items');
+const cartEmpty = document.querySelector('#cart-empty');
+const cartView = document.querySelector('#cart-view');
+const checkoutView = document.querySelector('#checkout-view');
+const checkoutSuccess = document.querySelector('#checkout-success');
+const cartStorageKey = 'eleve-bakery-cart-v1';
+const phonePatternHint = 'Enter a phone number with 8 to 15 digits.';
+const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+const money = new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 });
+let cart = loadCart();
 let toastTimer;
+
+function loadCart() {
+  try {
+    const stored = JSON.parse(localStorage.getItem('eleve-bakery-cart-v1') || '[]');
+    if (!Array.isArray(stored)) return [];
+    return stored.filter((item) => item && typeof item.name === 'string' && Number.isFinite(item.price) && item.price > 0 && Number.isInteger(item.quantity) && item.quantity > 0 && typeof item.key === 'string');
+  } catch {
+    return [];
+  }
+}
+
+function saveCart() {
+  try {
+    localStorage.setItem(cartStorageKey, JSON.stringify(cart));
+  } catch {
+    showToast('Your browser could not save this order.');
+  }
+}
+
+function cartSubtotal() {
+  return cart.reduce((sum, item) => sum + item.price * item.quantity, 0);
+}
+
+function makeSummaryRow(item) {
+  const row = document.createElement('div');
+  row.className = 'summary-row';
+  const name = document.createElement('span');
+  name.textContent = `${item.name} · ${money.format(item.price)} × ${item.quantity}`;
+  const amount = document.createElement('strong');
+  amount.textContent = money.format(item.price * item.quantity);
+  row.append(name, amount);
+  return row;
+}
+
+function renderSummary(container) {
+  container.replaceChildren(...cart.map(makeSummaryRow));
+}
+
+function renderCart() {
+  const itemCount = cart.reduce((sum, item) => sum + item.quantity, 0);
+  const subtotal = money.format(cartSubtotal());
+  cartCount.textContent = itemCount;
+  cartCount.setAttribute('aria-label', `${itemCount} ${itemCount === 1 ? 'item' : 'items'} in your order`);
+  cartItems.replaceChildren(...cart.map((item) => {
+    const row = document.createElement('article');
+    row.className = 'cart-line';
+    const details = document.createElement('div');
+    details.className = 'cart-line-details';
+    const name = document.createElement('h3');
+    name.textContent = item.name;
+    const unitPrice = document.createElement('span');
+    unitPrice.textContent = `${money.format(item.price)} each`;
+    details.append(name, unitPrice);
+
+    const controls = document.createElement('div');
+    controls.className = 'cart-line-controls';
+    const quantity = document.createElement('div');
+    quantity.className = 'quantity-control';
+    const decrease = document.createElement('button');
+    decrease.type = 'button';
+    decrease.dataset.cartAction = 'decrease';
+    decrease.dataset.itemKey = item.key;
+    decrease.setAttribute('aria-label', `Decrease ${item.name} quantity`);
+    decrease.textContent = '−';
+    const quantityValue = document.createElement('span');
+    quantityValue.textContent = item.quantity;
+    const increase = document.createElement('button');
+    increase.type = 'button';
+    increase.dataset.cartAction = 'increase';
+    increase.dataset.itemKey = item.key;
+    increase.setAttribute('aria-label', `Increase ${item.name} quantity`);
+    increase.textContent = '+';
+    quantity.append(decrease, quantityValue, increase);
+
+    const lineTotal = document.createElement('strong');
+    lineTotal.className = 'cart-line-total';
+    lineTotal.textContent = money.format(item.price * item.quantity);
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'cart-remove';
+    remove.dataset.cartAction = 'remove';
+    remove.dataset.itemKey = item.key;
+    remove.setAttribute('aria-label', `Remove ${item.name} from order`);
+    remove.textContent = 'Remove';
+    controls.append(quantity, lineTotal, remove);
+    row.append(details, controls);
+    return row;
+  }));
+  cartEmpty.hidden = cart.length > 0;
+  cartItems.hidden = cart.length === 0;
+  document.querySelector('#cart-subtotal').textContent = subtotal;
+  document.querySelector('#cart-total').textContent = subtotal;
+  document.querySelector('#checkout-start').disabled = cart.length === 0;
+  document.querySelector('#cart-clear').disabled = cart.length === 0;
+}
+
+function showCartView(view) {
+  cartView.hidden = view !== 'cart';
+  checkoutView.hidden = view !== 'checkout';
+  checkoutSuccess.hidden = view !== 'success';
+}
+
+function openCart() {
+  showCartView('cart');
+  if (!cartDialog.open) cartDialog.showModal();
+}
+
+function closeCart() {
+  if (cartDialog.open) cartDialog.close();
+}
+
+function addToCart(button) {
+  const name = button.dataset.order;
+  const price = Number(button.dataset.price);
+  if (!name || !Number.isFinite(price) || price <= 0) return;
+  const key = `${name}|${price}`;
+  const existing = cart.find((item) => item.key === key);
+  if (existing) existing.quantity += 1;
+  else cart.push({ key, name, price, quantity: 1 });
+  saveCart();
+  renderCart();
+  showToast(`${name} added to your order`);
+}
+
+function configurePhoneInput(input, hint) {
+  function validate() {
+    const digits = input.value.replace(/\D/g, '').length;
+    const invalid = input.value.length > 0 && (!/^[+()\d\s.-]+$/.test(input.value) || digits < 8 || digits > 15);
+    input.setCustomValidity(invalid ? phonePatternHint : '');
+    input.setAttribute('aria-invalid', String(invalid));
+    if (hint) hint.textContent = invalid ? phonePatternHint : '';
+  }
+  input.addEventListener('input', validate);
+  return validate;
+}
 
 function showToast(message) {
   toast.textContent = message;
@@ -52,12 +197,51 @@ if ('IntersectionObserver' in window) {
 }
 
 document.querySelectorAll('[data-order]').forEach((button) => {
-  button.addEventListener('click', () => {
-    orderCount += 1;
-    cartCount.textContent = orderCount;
-    cartCount.setAttribute('aria-label', `${orderCount} ${orderCount === 1 ? 'item' : 'items'} in order`);
-    showToast(`${button.dataset.order} added to your order · ₹${button.dataset.price}`);
-  });
+  button.setAttribute('aria-label', `Add ${button.dataset.order} to your order`);
+  button.addEventListener('click', () => addToCart(button));
+});
+
+document.querySelectorAll('[data-cart-open]').forEach((button) => button.addEventListener('click', openCart));
+document.querySelector('#cart-open').addEventListener('click', openCart);
+document.querySelector('#cart-close').addEventListener('click', closeCart);
+document.querySelector('#cart-clear').addEventListener('click', () => {
+  cart = [];
+  saveCart();
+  renderCart();
+  showToast('Your order bag is clear.');
+});
+cartItems.addEventListener('click', (event) => {
+  const control = event.target.closest('[data-cart-action]');
+  if (!control) return;
+  const item = cart.find((entry) => entry.key === control.dataset.itemKey);
+  if (!item) return;
+  if (control.dataset.cartAction === 'increase') item.quantity += 1;
+  if (control.dataset.cartAction === 'decrease') item.quantity -= 1;
+  if (control.dataset.cartAction === 'remove' || item.quantity <= 0) cart = cart.filter((entry) => entry.key !== item.key);
+  saveCart();
+  renderCart();
+});
+cartDialog.addEventListener('click', (event) => {
+  if (event.target === cartDialog) closeCart();
+  if (event.target.closest('[data-cart-close]')) {
+    closeCart();
+    document.querySelector('#menu').scrollIntoView({ behavior: reducedMotion.matches ? 'instant' : 'smooth' });
+  }
+});
+renderCart();
+
+document.querySelector('#checkout-start').addEventListener('click', () => {
+  if (!cart.length) return;
+  renderSummary(document.querySelector('#checkout-items'));
+  document.querySelector('#checkout-subtotal').textContent = money.format(cartSubtotal());
+  document.querySelector('#checkout-total').textContent = money.format(cartSubtotal());
+  showCartView('checkout');
+  checkoutForm.elements.name.focus();
+});
+document.querySelector('#checkout-back').addEventListener('click', () => showCartView('cart'));
+document.querySelector('#return-to-menu').addEventListener('click', () => {
+  closeCart();
+  window.setTimeout(() => document.querySelector('#menu').scrollIntoView({ behavior: reducedMotion.matches ? 'instant' : 'smooth' }), 0);
 });
 
 document.querySelectorAll('.filter-button').forEach((button) => {
@@ -151,6 +335,7 @@ function showSlide(index) {
 }
 function startCarousel() {
   window.clearInterval(carouselTimer);
+  if (reducedMotion.matches) return;
   carouselTimer = window.setInterval(() => showSlide(slideIndex + 1), 6000);
 }
 document.querySelector('#testimonial-prev').addEventListener('click', () => { showSlide(slideIndex - 1); startCarousel(); });
@@ -160,25 +345,76 @@ document.querySelector('.testimonial-stage').addEventListener('mouseenter', () =
 document.querySelector('.testimonial-stage').addEventListener('mouseleave', startCarousel);
 startCarousel();
 
-const eventDate = document.querySelector('#event-date');
-const today = new Date();
-eventDate.min = new Date(today.getTime() - today.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-const phoneInput = document.querySelector('[name="phone"]');
-function validatePhone() {
-  const digits = phoneInput.value.replace(/\D/g, '').length;
-  phoneInput.setCustomValidity(phoneInput.value && (digits < 8 || digits > 15) ? 'Enter a valid phone number with 8 to 15 digits.' : '');
+function localDateAfter(days = 0) {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() + days);
+  return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
 }
-phoneInput.addEventListener('input', validatePhone);
 
-document.querySelector('#order-form').addEventListener('submit', (event) => {
+const cakeForm = document.querySelector('#order-form');
+const cakeDate = document.querySelector('#event-date');
+const cakePhone = cakeForm.elements.phone;
+const cakePhoneValidate = configurePhoneInput(cakePhone, document.querySelector('#cake-phone-error'));
+cakeDate.min = localDateAfter(3);
+cakeForm.addEventListener('submit', (event) => {
   event.preventDefault();
-  const form = event.currentTarget;
+  cakePhoneValidate();
+  if (!cakeForm.reportValidity()) return;
+  const button = cakeForm.querySelector('[type="submit"]');
   const feedback = document.querySelector('#order-feedback');
-  validatePhone();
-  if (!form.reportValidity()) return;
-  feedback.textContent = 'Thank you for choosing Élevé! Your order request has been received. Our team will contact you shortly.';
-  form.reset();
-  eventDate.min = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+  const originalLabel = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Sending enquiry…';
+  feedback.textContent = 'Preparing your enquiry…';
+  window.setTimeout(() => {
+    feedback.textContent = 'Thank you! Your cake enquiry has been received. Our team will contact you shortly.';
+    cakeForm.reset();
+    cakeDate.min = localDateAfter(3);
+    cakePhoneValidate();
+    button.disabled = false;
+    button.textContent = originalLabel;
+  }, 650);
+});
+
+const checkoutForm = document.querySelector('#checkout-form');
+const checkoutDate = checkoutForm.elements.date;
+const checkoutPhone = checkoutForm.elements.phone;
+const checkoutPhoneValidate = configurePhoneInput(checkoutPhone, document.querySelector('#checkout-phone-error'));
+checkoutDate.min = localDateAfter();
+checkoutForm.addEventListener('submit', (event) => {
+  event.preventDefault();
+  checkoutPhoneValidate();
+  if (!checkoutForm.reportValidity() || !cart.length) return;
+  const button = checkoutForm.querySelector('[type="submit"]');
+  const feedback = document.querySelector('#checkout-feedback');
+  button.disabled = true;
+  button.textContent = 'Sending your order…';
+  feedback.textContent = 'Preparing your order summary…';
+  window.setTimeout(() => {
+    const customerName = checkoutForm.elements.name.value.trim();
+    const preferredDate = checkoutForm.elements.date.value;
+    const instructions = checkoutForm.elements.instructions.value.trim();
+    const reference = `ELV-${new Date().getFullYear()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+    const total = cartSubtotal();
+    renderSummary(document.querySelector('#success-items'));
+    document.querySelector('#success-subtotal').textContent = money.format(total);
+    document.querySelector('#success-total').textContent = money.format(total);
+    document.querySelector('#order-reference').textContent = reference;
+    const orderLines = cart.map((item) => `${item.quantity} × ${item.name} (${money.format(item.price * item.quantity)})`).join('\n');
+    const message = [`Hello Élevé Bakery, I am ${customerName}.`, `Order reference: ${reference}`, orderLines, `Total: ${money.format(total)}`, `Preferred date: ${preferredDate}`, instructions && `Instructions: ${instructions}`].filter(Boolean).join('\n');
+    document.querySelector('#whatsapp-order').href = `https://wa.me/912040000077?text=${encodeURIComponent(message)}`;
+    cart = [];
+    saveCart();
+    renderCart();
+    checkoutForm.reset();
+    checkoutDate.min = localDateAfter();
+    checkoutPhoneValidate();
+    button.disabled = false;
+    button.textContent = 'Send order request ↗';
+    showCartView('success');
+    document.querySelector('#success-title').focus();
+  }, 650);
 });
 
 document.querySelector('#newsletter-form').addEventListener('submit', (event) => {
@@ -195,18 +431,27 @@ document.querySelector('#year').textContent = new Date().getFullYear();
 const revealItems = document.querySelectorAll('.reveal');
 const stats = document.querySelector('.stat-row');
 let countersStarted = false;
+function counterText(counter, value) {
+  const formatted = counter.dataset.format === '2-digit' ? String(value).padStart(2, '0') : String(value);
+  return `${formatted}${counter.dataset.suffix || '+'}`;
+}
+
 function animateCounters() {
   if (countersStarted) return;
   countersStarted = true;
   document.querySelectorAll('[data-count]').forEach((counter) => {
     const target = Number(counter.dataset.count);
-    const suffix = counter.dataset.suffix || '+';
+    if (reducedMotion.matches) {
+      counter.textContent = counterText(counter, target);
+      return;
+    }
     const start = performance.now();
-    const duration = 1100;
+    const duration = 1250;
+    counter.textContent = counterText(counter, 0);
     function tick(now) {
       const progress = Math.min((now - start) / duration, 1);
       const eased = 1 - (1 - progress) ** 3;
-      counter.textContent = `${Math.round(target * eased)}${suffix}`;
+      counter.textContent = counterText(counter, Math.round(target * eased));
       if (progress < 1) requestAnimationFrame(tick);
     }
     requestAnimationFrame(tick);
@@ -230,7 +475,7 @@ if ('IntersectionObserver' in window) {
         animateCounters();
         statsObserver.disconnect();
       }
-    }, { threshold: 0.35 });
+    }, { threshold: 0.25 });
     statsObserver.observe(stats);
   }
 } else {
